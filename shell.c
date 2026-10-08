@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-#include "parser.c"
+#include "lexer.c"
 
 #define PROMPT "vsh %% "
 #define CMD_INDEX_SIZE 4096
