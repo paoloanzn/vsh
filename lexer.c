@@ -1,3 +1,5 @@
+#pragma once
+
 #include <stdio.h>
 #include <stdbool.h>
 
@@ -15,6 +17,8 @@ typedef enum {
     TOKEN_WORD,
     TOKEN_LITERAL,
     TOKEN_IO,
+
+    TOKEN_COUNT
 } TokenType;
 
 typedef enum {
