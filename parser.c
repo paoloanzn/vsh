@@ -4,6 +4,14 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifndef LOG
+#ifdef DEBUG
+#define LOG(...) printf("debug: "); printf(__VA_ARGS__)
+#else
+#define LOG(...) do {} while(0)
+#endif
+#endif
+
 /**
  * Grammar
  * <program> ::= <arg> <tail> | _epsilon_
@@ -104,20 +112,22 @@ bool is_terminal(const Symbol symbol) {
 #pragma GCC diagnostic ignored "-Woverride-init"
 #endif
 
-static Symbol gParsingTable[NON_TRM_SYM_COUNT][TERM_SYM_COUNT_RELATIVE][NON_TRM_SYM_COUNT+TERM_SYM_COUNT] = {
-    [0 ... NON_TRM_SYM_COUNT-1][0 ... TERM_SYM_COUNT_RELATIVE-1][0 ... NON_TRM_SYM_COUNT+TERM_SYM_COUNT-1] = SYMBOL_NAN,
+// The first element of each production rule in the table is equal to the count
+// of elements it contains.
+static Symbol gParsingTable[NON_TRM_SYM_COUNT][TERM_SYM_COUNT_RELATIVE][NON_TRM_SYM_COUNT+TERM_SYM_COUNT+1] = {
+    [0 ... NON_TRM_SYM_COUNT-1][0 ... TERM_SYM_COUNT_RELATIVE-1][0 ... NON_TRM_SYM_COUNT+TERM_SYM_COUNT] = SYMBOL_NAN,
 
-    [SYMBOL_PROGRAM][SYMBOL_WORD] = {SYMBOL_ARG, SYMBOL_TAIL},
-    [SYMBOL_PROGRAM][SYMBOL_LITERAL] = {SYMBOL_ARG, SYMBOL_TAIL},
-    [SYMBOL_PROGRAM][SYMBOL_EOI] = {SYMBOL_EPSILON},
+    [SYMBOL_PROGRAM][SYMBOL_WORD] = {2, SYMBOL_ARG, SYMBOL_TAIL},
+    [SYMBOL_PROGRAM][SYMBOL_LITERAL] = {2, SYMBOL_ARG, SYMBOL_TAIL},
+    [SYMBOL_PROGRAM][SYMBOL_EOI] = {1, SYMBOL_EPSILON},
 
-    [SYMBOL_TAIL][SYMBOL_WORD] = {SYMBOL_ARG, SYMBOL_PROGRAM},
-    [SYMBOL_TAIL][SYMBOL_LITERAL] = {SYMBOL_ARG, SYMBOL_PROGRAM},
-    [SYMBOL_TAIL][SYMBOL_IO] = {SYMBOL_IO, SYMBOL_PROGRAM},
-    [SYMBOL_TAIL][SYMBOL_EOI] = {SYMBOL_EPSILON},
+    [SYMBOL_TAIL][SYMBOL_WORD] = {2, SYMBOL_ARG, SYMBOL_PROGRAM},
+    [SYMBOL_TAIL][SYMBOL_LITERAL] = {2, SYMBOL_ARG, SYMBOL_PROGRAM},
+    [SYMBOL_TAIL][SYMBOL_IO] = {2, SYMBOL_IO, SYMBOL_PROGRAM},
+    [SYMBOL_TAIL][SYMBOL_EOI] = {1, SYMBOL_EPSILON},
 
-    [SYMBOL_ARG][SYMBOL_WORD] = {SYMBOL_WORD},
-    [SYMBOL_ARG][SYMBOL_LITERAL] = {SYMBOL_LITERAL},
+    [SYMBOL_ARG][SYMBOL_WORD] = {1, SYMBOL_WORD},
+    [SYMBOL_ARG][SYMBOL_LITERAL] = {1, SYMBOL_LITERAL},
 };
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -130,7 +140,7 @@ typedef struct ASTNode {
     struct ASTNode **children;
 } ASTNode;
 
-#define MAX_PARSING_STACK_SIZE 4096
+#define MAX_PARSING_STACK_SIZE 20
 
 typedef struct SymbolStack {
     size_t size;
@@ -172,19 +182,24 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
     };
     Symbol start_symbol = SYMBOL_PROGRAM;
     if (!stack.push(&stack, &start_symbol)) {
-        snprintf(err_msg, sizeof("push: stack is full\n"), "push: stack is full\n");
+        #define ERROR_MSG "parsing error: failed to push element \
+        onto the stack, no space left on it\n"
+        snprintf(err_msg, 
+            sizeof(ERROR_MSG), ERROR_MSG);
         return false;
     }
 
     int token_cursor = 0;
 
-    while(stack.is_empty(&stack)) {
+    while(!stack.is_empty(&stack)) {
+        LOG("LL(1): Iterating, stack size=%d\t", stack.top);
         #define POPPED_BUFFER_SIZE 4096
         Symbol next_symbol = gTokenSymbolMap[tokens[token_cursor].type];
-        Symbol top = stack.ptr_stack[top-1];
+        Symbol top = stack.ptr_stack[stack.top-1];
         Symbol popped[POPPED_BUFFER_SIZE] = {};
 
         if (is_terminal(top) || top == SYMBOL_EOI) {
+            LOG("LL(1): Processing terminal: %s\n", gSymbolsLiteralsReferenceTable[top]);
             if (!(top == next_symbol)) {
                 #define ERROR_MSG "syntax error: expected %s, got %s\n"
                 snprintf(err_msg, 
@@ -194,18 +209,48 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
                 return false;
             }
 
+            LOG("LL(1): Popping symbol: %s\n", \
+                gSymbolsLiteralsReferenceTable[stack.ptr_stack[stack.top-1]]);
             if (!stack.pop(&stack, popped, 1)) {
                 #define ERROR_MSG "parsing error: failed to pop element from the stack\n"
                 snprintf(err_msg, sizeof(ERROR_MSG), ERROR_MSG);
                 return false;
             }
-            
+            token_cursor += 1;
             // TODO: add to AST;
         }
         if (!is_terminal(top)) {
+            LOG("LL(1): Processing non-terminal: %s\n", gSymbolsLiteralsReferenceTable[top]);
+            if (gParsingTable[top][next_symbol][0] == SYMBOL_NAN) {
+                #define ERROR_MSG "syntax error: no matching production for %s starting with %s\n"
+                snprintf(err_msg, sizeof(ERROR_MSG), ERROR_MSG, 
+                    gSymbolsLiteralsReferenceTable[top],
+                    gSymbolsLiteralsReferenceTable[next_symbol]);
+                return false;
+            }
 
+            LOG("LL(1): Popping symbol: %s\n", \
+                gSymbolsLiteralsReferenceTable[stack.ptr_stack[stack.top-1]]);
+            if (!stack.pop(&stack, popped, 1)) {
+                #define ERROR_MSG "parsing error: failed to pop element from the stack\n"
+                snprintf(err_msg, sizeof(ERROR_MSG), ERROR_MSG);
+                return false;
+            }
+
+            int num_symbols = gParsingTable[top][next_symbol][0];
+            for (int i = 0; i < num_symbols; i++) {
+                LOG("LL(1): Pushing symbol: %s\n", 
+                    gSymbolsLiteralsReferenceTable[gParsingTable[top][next_symbol][num_symbols-i]]);
+                if (!stack.push(&stack, &gParsingTable[top][next_symbol][num_symbols-i])) {
+                    #define ERROR_MSG "parsing error: failed to push element \
+                    onto the stack, no space left on it\n"
+                    snprintf(err_msg, 
+                        sizeof(ERROR_MSG), ERROR_MSG);
+                    return false;
+                }
+            }
         }
-        token_cursor += 1;
+
 
     }
 

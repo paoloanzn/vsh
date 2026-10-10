@@ -5,11 +5,12 @@
 
 #define MAX_TOKEN_LEN 10000
 
-#ifndef DEBUG
-#define LOG(msg) do {} while(0)
-#endif
+#ifndef LOG
 #ifdef DEBUG
-#define LOG(msg) (printf("debug: %s\n", msg))
+#define LOG(...) printf("debug: "); printf(__VA_ARGS__)
+#else
+#define LOG(...) do {} while(0)
+#endif
 #endif
 
 typedef enum {

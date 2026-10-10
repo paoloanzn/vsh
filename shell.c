@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 
 #include "lexer.c"
+#include "parser.c"
 
 #define PROMPT "vsh %% "
 #define CMD_INDEX_SIZE 4096
@@ -119,6 +120,11 @@ int main(int _argc, char **_argv, char **envp) {
  
         if (!get_tokens_for_string(cmd_buffer, read_chars, 
             tokens, error_msg, &num_token)) {
+            printf("error: %s\n", error_msg);
+            continue;
+        }
+
+        if (!parse_tokens(tokens, NULL, error_msg)) {
             printf("error: %s\n", error_msg);
             continue;
         }
