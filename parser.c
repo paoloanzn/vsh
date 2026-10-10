@@ -192,12 +192,13 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
     int token_cursor = 0;
 
     while(!stack.is_empty(&stack)) {
-        LOG("LL(1): Iterating, stack size=%d\t", stack.top);
+        LOG("LL(1): Iterating, stack size=%d\n", stack.top);
         #define POPPED_BUFFER_SIZE 4096
         Symbol next_symbol = gTokenSymbolMap[tokens[token_cursor].type];
         Symbol top = stack.ptr_stack[stack.top-1];
         Symbol popped[POPPED_BUFFER_SIZE] = {};
 
+        LOG("LL(1): Next token: %s\n", gSymbolsLiteralsReferenceTable[next_symbol]);
         if (is_terminal(top) || top == SYMBOL_EOI) {
             LOG("LL(1): Processing terminal: %s\n", gSymbolsLiteralsReferenceTable[top]);
             if (!(top == next_symbol)) {
@@ -223,7 +224,7 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
             LOG("LL(1): Processing non-terminal: %s\n", gSymbolsLiteralsReferenceTable[top]);
             if (gParsingTable[top][next_symbol][0] == SYMBOL_NAN) {
                 #define ERROR_MSG "syntax error: no matching production for %s starting with %s\n"
-                snprintf(err_msg, sizeof(ERROR_MSG), ERROR_MSG, 
+                snprintf(err_msg, sizeof(ERROR_MSG)+50, ERROR_MSG, 
                     gSymbolsLiteralsReferenceTable[top],
                     gSymbolsLiteralsReferenceTable[next_symbol]);
                 return false;

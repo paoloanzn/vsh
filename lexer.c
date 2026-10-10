@@ -22,6 +22,13 @@ typedef enum {
     TOKEN_COUNT
 } TokenType;
 
+char *gTokenLiteralsReferenceTable[TOKEN_COUNT] = {
+    [TOKEN_EMPTY] = "TOKEN_EMPTY",
+    [TOKEN_IO] = "TOKEN_IO",
+    [TOKEN_WORD] = "TOKEN_WORD",
+    [TOKEN_LITERAL] = "TOKEN_LITERAL",
+};
+
 typedef enum {
     STATE_START = 1,
     STATE_TWO,
@@ -53,7 +60,8 @@ typedef struct {
         [STATE_TWO] = [[45, 58], [63, 95], [97, 122], 126],
         [STATE_IO] = [26, 60, 62, 124],
         [STATE_SIX] = [34],
-        [STATE_EMPTY] = [0, 9, 10, 32]
+        [STATE_START] = [9, 10, 32],
+        [STATE_EMPTY] = [0]
     }
     STATE_TWO_TRANSITIONS = {
         [STATE_TWO] = [[45, 58], [63, 95], [97, 122], 126],
@@ -89,10 +97,10 @@ typedef struct {
     SET_VALUE_AT_INDEX(62 + COMPUTE_OFFSET(STATE_START), STATE_IO) \
     SET_VALUE_AT_INDEX(124 + COMPUTE_OFFSET(STATE_START), STATE_IO) \
     SET_VALUE_AT_INDEX(34 + COMPUTE_OFFSET(STATE_START), STATE_SIX) \
+    SET_VALUE_AT_INDEX(9 + COMPUTE_OFFSET(STATE_START), STATE_START) \
+    SET_VALUE_AT_INDEX(10 + COMPUTE_OFFSET(STATE_START), STATE_START) \
+    SET_VALUE_AT_INDEX(32 + COMPUTE_OFFSET(STATE_START), STATE_START) \
     SET_VALUE_AT_INDEX(0 + COMPUTE_OFFSET(STATE_START), STATE_EMPTY) \
-    SET_VALUE_AT_INDEX(9 + COMPUTE_OFFSET(STATE_START), STATE_EMPTY) \
-    SET_VALUE_AT_INDEX(10 + COMPUTE_OFFSET(STATE_START), STATE_EMPTY) \
-    SET_VALUE_AT_INDEX(32 + COMPUTE_OFFSET(STATE_START), STATE_EMPTY) \
     SET_VALUE_AT_RANGE(45, 58, COMPUTE_OFFSET(STATE_TWO), STATE_TWO) \
     SET_VALUE_AT_RANGE(63, 95, COMPUTE_OFFSET(STATE_TWO), STATE_TWO) \
     SET_VALUE_AT_RANGE(97, 122, COMPUTE_OFFSET(STATE_TWO), STATE_TWO) \
@@ -145,6 +153,9 @@ bool get_tokens_for_string(const char *input_string, size_t s_len,
 
         state = run_transition(state, c, gTransitionsTable);
         switch(state) {
+            case STATE_START:
+                // Whitespace between tokens is skipped, not part of any token.
+                continue;
             case STATE_EMPTY:
                 token.type = TOKEN_EMPTY;
                 token_len++;
@@ -176,6 +187,7 @@ bool get_tokens_for_string(const char *input_string, size_t s_len,
         *num_token += 1;
         token_len = 0;
         state = STATE_START;
+        LOG("Lexer: Found token: %s\n", gTokenLiteralsReferenceTable[token.type]);
     }
     return true;
 };
