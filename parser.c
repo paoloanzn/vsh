@@ -1,7 +1,9 @@
 #pragma once
 
 #include "lexer.c"
+
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef LOG
@@ -135,10 +137,69 @@ static Symbol gParsingTable[NON_TRM_SYM_COUNT][TERM_SYM_COUNT_RELATIVE][NON_TRM_
 #endif
 
 typedef struct ASTNode {
-    char *laber;
-    char *value;    
+    char *label;
+    char *value;
+    int num_children;
     struct ASTNode **children;
+    bool (*add_children)(struct ASTNode *self,
+        const char *label, const char *value);
 } ASTNode;
+
+#define MAX_CHILDREN_FOR_NODE 100
+ASTNode *create_node(const char *label, const char *value, size_t value_len) {
+    ASTNode *new_node = (ASTNode *)malloc(sizeof(ASTNode));
+    if (new_node == NULL)
+        return NULL;
+
+    int label_len = strlen(label);
+    new_node->label = (char *)malloc(label_len+1);
+    strcpy(new_node->label, label);
+
+    new_node->value = (char *)malloc(value_len+1);
+    memcpy(new_node->value, value, value_len);
+    new_node->value[value_len] = '\0';
+
+    new_node->num_children = 0;
+    new_node->children = (ASTNode **)malloc(MAX_CHILDREN_FOR_NODE*sizeof(ASTNode *));
+    if (new_node->children == NULL) {
+        free(new_node->label);
+        free(new_node->value);
+        free(new_node);
+        return NULL;
+    }
+    return new_node;
+}
+
+void delete_tree(ASTNode *root) {
+    free(root->label);
+    free(root->value);
+    for (int i = 0; i < root->num_children; i++) {
+        delete_tree(root->children[i]);
+    }
+    free(root->children);
+    free(root);
+    return;
+}
+
+#define SET_LINE_INDENTATION(n) \
+    for (int i = 0; i < n; i++) { \
+        printf("\t"); \
+    }
+
+void print_node(ASTNode *node, int indent_level) {
+    SET_LINE_INDENTATION(indent_level);
+    printf("Label: %s\n", node->label);
+    SET_LINE_INDENTATION(indent_level);
+    printf("Value: %s\n", node->value);
+
+    if (node->num_children == 0)
+        return;
+
+    for (int i = 0; i < node->num_children; i++) {
+        print_node(node->children[i], indent_level+1);
+    }
+    return;
+}
 
 #define MAX_PARSING_STACK_SIZE 20
 
@@ -173,6 +234,15 @@ int pop(SymbolStack *self, Symbol symbols_out[], int num_symbols) {
     }
     return copied;
 }
+
+bool add_children(ASTNode *self, ASTNode *child) {
+    if (self->num_children == MAX_CHILDREN_FOR_NODE)
+        return false;
+    self->children[self->num_children] = child;
+    self->num_children += 1;
+    return true;
+}
+
 bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
     Symbol _stack[MAX_PARSING_STACK_SIZE] = {};
     SymbolStack stack = {
