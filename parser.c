@@ -140,6 +140,8 @@ typedef struct ASTNode {
     char *label;
     char *value;
     int num_children;
+    struct ASTNode *parent;
+    struct ASTNode *right_sibling;
     struct ASTNode **children;
     bool (*add_children)(struct ASTNode *self, struct ASTNode *child);
 } ASTNode;
@@ -148,12 +150,15 @@ typedef struct ASTNode {
 bool add_children(ASTNode *self, ASTNode *child) {
     if (self->num_children == MAX_CHILDREN_FOR_NODE)
         return false;
+    child->parent = self;
     self->children[self->num_children] = child;
+    if (self->num_children > 0)
+        child->right_sibling = self->children[self->num_children - 1];
     self->num_children += 1;
     return true;
 }
 
-ASTNode *create_node(const char *label, const char *value, size_t value_len) {
+ASTNode *create_node(const char *label) {
     ASTNode *new_node = (ASTNode *)malloc(sizeof(ASTNode));
     if (new_node == NULL)
         return NULL;
@@ -162,19 +167,18 @@ ASTNode *create_node(const char *label, const char *value, size_t value_len) {
     new_node->label = (char *)malloc(label_len+1);
     strcpy(new_node->label, label);
 
-    new_node->value = (char *)malloc(value_len+1);
-    memcpy(new_node->value, value, value_len);
-    new_node->value[value_len] = '\0';
+    new_node->value = NULL;
 
     new_node->num_children = 0;
     new_node->children = (ASTNode **)malloc(MAX_CHILDREN_FOR_NODE*sizeof(ASTNode *));
     if (new_node->children == NULL) {
         free(new_node->label);
-        free(new_node->value);
         free(new_node);
         return NULL;
     }
 
+    new_node->right_sibling = NULL;
+    new_node->parent = NULL;
     new_node->add_children = add_children;
     return new_node;
 }
@@ -183,7 +187,8 @@ void delete_tree(ASTNode *root) {
     if (root == NULL)
         return;
     free(root->label);
-    free(root->value);
+    if (root->value)
+        free(root->value);
     for (int i = 0; i < root->num_children; i++) {
         delete_tree(root->children[i]);
     }
@@ -194,14 +199,16 @@ void delete_tree(ASTNode *root) {
 
 #define SET_LINE_INDENTATION(n) \
     for (int i = 0; i < n; i++) { \
-        printf("\t"); \
-    }
+        printf("    "); \
+    } \
 
 void print_node(ASTNode *node, int indent_level) {
     SET_LINE_INDENTATION(indent_level);
-    printf("Label: %s\n", node->label);
-    SET_LINE_INDENTATION(indent_level);
-    printf("Value: %s\n", node->value);
+    printf("Label: %s | ", node->label);
+    if (node->value != NULL)
+        printf("Value: %s\n", node->value);
+    else
+        printf("NaN\n");
 
     if (node->num_children == 0)
         return;
@@ -251,9 +258,7 @@ int pop(SymbolStack *self, Symbol symbols_out[], int num_symbols) {
 #define FORMAT_ERROR(format, err, ...) \
 snprintf(err, sizeof(format), format, ##__VA_ARGS__)
 
-bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
-    delete_tree(root); // In case someone gives in a non-empty tree
-
+bool parse_tokens(Token tokens[], ASTNode **out_root, char *err_msg) {
     Symbol _stack[MAX_PARSING_STACK_SIZE] = {};
     SymbolStack stack = {
         MAX_PARSING_STACK_SIZE, 0,
@@ -268,8 +273,7 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
         return false;
     }
 
-    root = create_node(gSymbolsLiteralsReferenceTable[start_symbol], 
-        "NaN", 3);
+    ASTNode *root = create_node(gSymbolsLiteralsReferenceTable[start_symbol]);
     if (root == NULL)
         return false;
     ASTNode *active_node = root;
@@ -295,6 +299,19 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
 
             LOG("LL(1): Popping symbol: %s\n", \
                 gSymbolsLiteralsReferenceTable[stack.ptr_stack[stack.top-1]]);
+                
+            active_node->value = (char *)malloc(tokens[token_cursor].len+1);
+            memcpy(active_node->value, 
+                tokens[token_cursor].value, tokens[token_cursor].len);
+            active_node->value[tokens[token_cursor].len] = '\0'; 
+                
+            // Walk up the three to find the first available right sibling.
+            ASTNode *nearest_right_sibling = active_node->right_sibling;
+            while (nearest_right_sibling == NULL) {
+                nearest_right_sibling = active_node->parent->right_sibling;
+            }
+            active_node = nearest_right_sibling;
+
             if (!stack.pop(&stack, popped, 1)) {
                 FORMAT_ERROR(
                     "parsing error: failed to pop element \
@@ -302,10 +319,12 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
                 return false;
             }
             token_cursor += 1;
-            // TODO: add to AST;
+
+            
         }
         if (!is_terminal(top)) {
-            LOG("LL(1): Processing non-terminal: %s\n", gSymbolsLiteralsReferenceTable[top]);
+            LOG("LL(1): Processing non-terminal: %s\n", 
+                gSymbolsLiteralsReferenceTable[top]);
             if (gParsingTable[top][next_symbol][0] == SYMBOL_NAN) {
                 FORMAT_ERROR("syntax error: no matching production \
                     for %s starting with %s\n", err_msg,
@@ -325,8 +344,19 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
 
             int num_symbols = gParsingTable[top][next_symbol][0];
             for (int i = 0; i < num_symbols; i++) {
+                Symbol symbol = gParsingTable[top][next_symbol][num_symbols-i];
                 LOG("LL(1): Pushing symbol: %s\n", 
-                    gSymbolsLiteralsReferenceTable[gParsingTable[top][next_symbol][num_symbols-i]]);
+                    gSymbolsLiteralsReferenceTable[symbol]);
+                
+                ASTNode *child_node = create_node(
+                    gSymbolsLiteralsReferenceTable[symbol]);
+                if (child_node == NULL) {
+                    FORMAT_ERROR("AST error: failed to create node\n", 
+                        err_msg);
+                    return false;
+                }
+                active_node->add_children(active_node, child_node);
+
                 if (!stack.push(&stack, &gParsingTable[top][next_symbol][num_symbols-i])) {
                     FORMAT_ERROR(
                         "parsing error: failed to push element onto the stack, \
@@ -334,10 +364,12 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
                     return false;
                 }
             }
+
+            active_node = active_node->children[num_symbols-1];
         }
 
 
     }
-
+    *out_root = root;
     return true;
 }

@@ -8,6 +8,14 @@
 #include "lexer.c"
 #include "parser.c"
 
+#ifndef LOG
+#ifdef DEBUG
+#define LOG(...) printf("debug: "); printf(__VA_ARGS__)
+#else
+#define LOG(...) do {} while(0)
+#endif
+#endif
+
 #define PROMPT "vsh %% "
 #define CMD_INDEX_SIZE 4096
 #define CMD_BUF_SIZE 4096
@@ -124,10 +132,16 @@ int main(int _argc, char **_argv, char **envp) {
             continue;
         }
 
-        if (!parse_tokens(tokens, NULL, error_msg)) {
+        ASTNode *root;
+        if (!parse_tokens(tokens, &root, error_msg)) {
             printf("error: %s\n", error_msg);
+            delete_tree(root);
             continue;
         }
+
+        #ifdef DEBUG
+        print_node(root, 0);
+        #endif 
 
         Token *cmd = &tokens[0];
         snprintf(cmd_string, cmd->len, "%s", cmd->value);
@@ -148,6 +162,7 @@ int main(int _argc, char **_argv, char **envp) {
         if (resolve_command_path(envp[path_idx] + 5, 
                 cmd_string, cmd_abs_path) < 0) {
             printf("error: %s: command not found\n", cmd_string);
+            delete_tree(root);
             continue;
         }
 
@@ -166,6 +181,7 @@ int main(int _argc, char **_argv, char **envp) {
             execv(cmd_abs_path, args);
         } else {
             wait(&child_status);
+            delete_tree(root);
         }
     }
     return 0;
