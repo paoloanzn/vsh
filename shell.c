@@ -132,7 +132,7 @@ int main(int _argc, char **_argv, char **envp) {
             continue;
         }
 
-        ASTNode *root;
+        ASTNode *root = NULL;
         if (!parse_tokens(tokens, &root, error_msg)) {
             printf("error: %s\n", error_msg);
             delete_tree(root);
