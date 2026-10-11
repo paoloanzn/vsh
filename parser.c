@@ -15,7 +15,7 @@
 /**
  * Grammar
  * <program> ::= <arg> <tail> | _epsilon_
- * <tail>    ::= <arg> <program> | io <program> | _epsilon_
+ * <tail>    ::= <program> | io <program>
  * <arg>     ::= word | literal
  * 
  */
@@ -95,14 +95,14 @@ bool is_terminal(const Symbol symbol) {
     |-----------+----------------------|
     | <program> | $                    |
     | <tail>    | $                    |
-    | <arg>     | word, literal, $     |
+    | <arg>     | word, literal, io, $ |
 */
 
 /*
     |           | word            | literal         | io             | $
     |-----------+-----------------+-----------------+----------------+----------|
     | <program> | <arg> <tail>    | <arg> <tail>    |                | _epsilon_
-    | <tail>    | <arg> <program> | <arg> <program> | io <program>   | _epsilon_
+    | <tail>    | <program>       | <program>       | io <program>   | <program>
     | <arg>     | word            | literal         |                |
 */
 
@@ -121,10 +121,10 @@ static Symbol gParsingTable[NON_TRM_SYM_COUNT][TERM_SYM_COUNT_RELATIVE][NON_TRM_
     [SYMBOL_PROGRAM][SYMBOL_LITERAL] = {2, SYMBOL_ARG, SYMBOL_TAIL},
     [SYMBOL_PROGRAM][SYMBOL_EOI] = {1, SYMBOL_EPSILON},
 
-    [SYMBOL_TAIL][SYMBOL_WORD] = {2, SYMBOL_ARG, SYMBOL_PROGRAM},
-    [SYMBOL_TAIL][SYMBOL_LITERAL] = {2, SYMBOL_ARG, SYMBOL_PROGRAM},
+    [SYMBOL_TAIL][SYMBOL_WORD] = {1, SYMBOL_PROGRAM},
+    [SYMBOL_TAIL][SYMBOL_LITERAL] = {1, SYMBOL_PROGRAM},
     [SYMBOL_TAIL][SYMBOL_IO] = {2, SYMBOL_IO, SYMBOL_PROGRAM},
-    [SYMBOL_TAIL][SYMBOL_EOI] = {1, SYMBOL_EPSILON},
+    [SYMBOL_TAIL][SYMBOL_EOI] = {1, SYMBOL_PROGRAM},
 
     [SYMBOL_ARG][SYMBOL_WORD] = {1, SYMBOL_WORD},
     [SYMBOL_ARG][SYMBOL_LITERAL] = {1, SYMBOL_LITERAL},
