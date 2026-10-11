@@ -141,11 +141,18 @@ typedef struct ASTNode {
     char *value;
     int num_children;
     struct ASTNode **children;
-    bool (*add_children)(struct ASTNode *self,
-        const char *label, const char *value);
+    bool (*add_children)(struct ASTNode *self, struct ASTNode *child);
 } ASTNode;
 
 #define MAX_CHILDREN_FOR_NODE 100
+bool add_children(ASTNode *self, ASTNode *child) {
+    if (self->num_children == MAX_CHILDREN_FOR_NODE)
+        return false;
+    self->children[self->num_children] = child;
+    self->num_children += 1;
+    return true;
+}
+
 ASTNode *create_node(const char *label, const char *value, size_t value_len) {
     ASTNode *new_node = (ASTNode *)malloc(sizeof(ASTNode));
     if (new_node == NULL)
@@ -167,10 +174,14 @@ ASTNode *create_node(const char *label, const char *value, size_t value_len) {
         free(new_node);
         return NULL;
     }
+
+    new_node->add_children = add_children;
     return new_node;
 }
 
 void delete_tree(ASTNode *root) {
+    if (root == NULL)
+        return;
     free(root->label);
     free(root->value);
     for (int i = 0; i < root->num_children; i++) {
@@ -235,15 +246,14 @@ int pop(SymbolStack *self, Symbol symbols_out[], int num_symbols) {
     return copied;
 }
 
-bool add_children(ASTNode *self, ASTNode *child) {
-    if (self->num_children == MAX_CHILDREN_FOR_NODE)
-        return false;
-    self->children[self->num_children] = child;
-    self->num_children += 1;
-    return true;
-}
+// ##__VA_ARGS__ notation requires GNU C compiler extensions.
+// Use `-std=gnuXX`. 
+#define FORMAT_ERROR(format, err, ...) \
+snprintf(err, sizeof(format), format, ##__VA_ARGS__)
 
 bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
+    delete_tree(root); // In case someone gives in a non-empty tree
+
     Symbol _stack[MAX_PARSING_STACK_SIZE] = {};
     SymbolStack stack = {
         MAX_PARSING_STACK_SIZE, 0,
@@ -252,12 +262,17 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
     };
     Symbol start_symbol = SYMBOL_PROGRAM;
     if (!stack.push(&stack, &start_symbol)) {
-        #define ERROR_MSG "parsing error: failed to push element \
-        onto the stack, no space left on it\n"
-        snprintf(err_msg, 
-            sizeof(ERROR_MSG), ERROR_MSG);
+        FORMAT_ERROR(
+            "parsing error: failed to push element onto the stack, \
+            no space left on it\n", err_msg);
         return false;
     }
+
+    root = create_node(gSymbolsLiteralsReferenceTable[start_symbol], 
+        "NaN", 3);
+    if (root == NULL)
+        return false;
+    ASTNode *active_node = root;
 
     int token_cursor = 0;
 
@@ -272,10 +287,8 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
         if (is_terminal(top) || top == SYMBOL_EOI) {
             LOG("LL(1): Processing terminal: %s\n", gSymbolsLiteralsReferenceTable[top]);
             if (!(top == next_symbol)) {
-                #define ERROR_MSG "syntax error: expected %s, got %s\n"
-                snprintf(err_msg, 
-                    sizeof(ERROR_MSG), 
-                    ERROR_MSG, gSymbolsLiteralsReferenceTable[top],
+                FORMAT_ERROR("syntax error: expected %s, got %s\n", err_msg,
+                    gSymbolsLiteralsReferenceTable[top], 
                     gSymbolsLiteralsReferenceTable[next_symbol]);
                 return false;
             }
@@ -283,8 +296,9 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
             LOG("LL(1): Popping symbol: %s\n", \
                 gSymbolsLiteralsReferenceTable[stack.ptr_stack[stack.top-1]]);
             if (!stack.pop(&stack, popped, 1)) {
-                #define ERROR_MSG "parsing error: failed to pop element from the stack\n"
-                snprintf(err_msg, sizeof(ERROR_MSG), ERROR_MSG);
+                FORMAT_ERROR(
+                    "parsing error: failed to pop element \
+                    from the stack\n", err_msg);
                 return false;
             }
             token_cursor += 1;
@@ -293,18 +307,19 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
         if (!is_terminal(top)) {
             LOG("LL(1): Processing non-terminal: %s\n", gSymbolsLiteralsReferenceTable[top]);
             if (gParsingTable[top][next_symbol][0] == SYMBOL_NAN) {
-                #define ERROR_MSG "syntax error: no matching production for %s starting with %s\n"
-                snprintf(err_msg, sizeof(ERROR_MSG)+50, ERROR_MSG, 
+                FORMAT_ERROR("syntax error: no matching production \
+                    for %s starting with %s\n", err_msg,
                     gSymbolsLiteralsReferenceTable[top],
-                    gSymbolsLiteralsReferenceTable[next_symbol]);
+                gSymbolsLiteralsReferenceTable[next_symbol]);
                 return false;
             }
 
             LOG("LL(1): Popping symbol: %s\n", \
                 gSymbolsLiteralsReferenceTable[stack.ptr_stack[stack.top-1]]);
             if (!stack.pop(&stack, popped, 1)) {
-                #define ERROR_MSG "parsing error: failed to pop element from the stack\n"
-                snprintf(err_msg, sizeof(ERROR_MSG), ERROR_MSG);
+                FORMAT_ERROR(
+                    "parsing error: failed to pop element \
+                    from the stack\n", err_msg);
                 return false;
             }
 
@@ -313,10 +328,9 @@ bool parse_tokens(Token tokens[], ASTNode *root, char *err_msg) {
                 LOG("LL(1): Pushing symbol: %s\n", 
                     gSymbolsLiteralsReferenceTable[gParsingTable[top][next_symbol][num_symbols-i]]);
                 if (!stack.push(&stack, &gParsingTable[top][next_symbol][num_symbols-i])) {
-                    #define ERROR_MSG "parsing error: failed to push element \
-                    onto the stack, no space left on it\n"
-                    snprintf(err_msg, 
-                        sizeof(ERROR_MSG), ERROR_MSG);
+                    FORMAT_ERROR(
+                        "parsing error: failed to push element onto the stack, \
+                        no space left on it\n", err_msg);
                     return false;
                 }
             }
