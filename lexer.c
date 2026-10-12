@@ -145,11 +145,13 @@ State run_transition(State state, char input_char, const State *transition_table
 
 bool get_tokens_for_string(const char *input_string, size_t s_len, 
     Token tokens_out[], char *error_msg, int *num_token) {
+    int trail_junk_count = 0;
     int token_len = 0;
     State state = STATE_START;
     for (int cursor = 0; cursor < s_len; cursor++) {
         Token token;
         char c = input_string[cursor];
+
 
         state = run_transition(state, c, gTransitionsTable);
         switch(state) {
@@ -167,10 +169,12 @@ bool get_tokens_for_string(const char *input_string, size_t s_len,
             case STATE_LITERAL:
                 token.type = TOKEN_LITERAL;
                 token_len++;
+                trail_junk_count++;
                 break;
             case STATE_WORD:
                 token.type = TOKEN_WORD;
                 token_len++;
+                trail_junk_count++;
                 break;
             case STATE_INVALID:
                 // TODO: replace tmp with an actual error.
@@ -182,10 +186,11 @@ bool get_tokens_for_string(const char *input_string, size_t s_len,
         }
 
         token.value = input_string + cursor + 1 - token_len;
-        token.len = token_len;
+        token.len = token_len - trail_junk_count;
         tokens_out[*num_token] = token;
         *num_token += 1;
         token_len = 0;
+        trail_junk_count = 0;
         state = STATE_START;
         LOG("Lexer: Found token: %s\n", gTokenLiteralsReferenceTable[token.type]);
     }
