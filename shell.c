@@ -11,6 +11,7 @@
 
 #include "lexer.c"
 #include "parser.c"
+#include "signal.c"
 
 // Debug logging: prints only when compiled with -DDEBUG (see compile.sh).
 #ifndef LOG
@@ -217,6 +218,13 @@ bool collect_arguments(char *args_out[], int *args_count,
 // Read-eval loop: reads a line, tokenizes and parses it, then runs it in a
 // child process. Exits on the "exit" command or when input can't be read.
 int main(int _argc, char **_argv, char **envp) {
+    char error_msg[4096] = "";
+
+    if(!block_sigint(error_msg)) {
+        printf("error: %s\n", error_msg);
+        exit(1);
+    }
+
     int path_idx;
     if (get_path(envp, &path_idx) < 0) {
         die("PATH is not defined.");
@@ -234,7 +242,7 @@ int main(int _argc, char **_argv, char **envp) {
         Token tokens[MAX_ARGS+1] = {}; 
         int num_token = 0;
 
-        char cmd_string[4096]; char error_msg[4096] = "";
+        char cmd_string[4096]; 
         char cmd_abs_path[4096];
 
         // Arguments for execv; the extra slot is for the closing NULL.
