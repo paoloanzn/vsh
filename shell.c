@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 
 #include "lexer.c"
 #include "parser.c"
@@ -17,6 +19,12 @@
 #else
 #define LOG(...) do {} while(0)
 #endif
+#endif
+
+// Writes a formatted error message into `err`. 
+#ifndef FORMAT_ERROR
+#define FORMAT_ERROR(format, err, ...) \
+snprintf(err, 4096, format, ##__VA_ARGS__)
 #endif
 
 #define PROMPT "vsh %% "
@@ -54,6 +62,40 @@ int get_path(char **input, int *idx_out) {
 // Returns 0 if `path` exists and is executable, -1 otherwise.
 int exec_file_exists(const char *path) {
     return access(path, F_OK | X_OK);
+}
+
+bool is_directory(const char *path) {
+    struct stat path_stat;
+    if(stat(path, &path_stat) != 0) {
+        // We assume path existence and accessibility
+        // have been already checked.
+        die("error: can't read path stats");
+    }
+    if(S_ISDIR(path_stat.st_mode))
+        return true;
+    return false;
+}
+
+bool can_write_at_path(const char *path, char *err_msg) {
+    // Check if path exists (i.e file or directory)
+    bool path_exists = true;
+    if (access(path, F_OK) < 0)
+        path_exists = false;
+
+    // If exists check if is a directory
+    if (path_exists && is_directory(path)) {
+        FORMAT_ERROR("'%s' is a directory", err_msg, path);
+        return false;
+    }
+
+    // If exists check it's writable
+    if (path_exists && (access(path, W_OK) < 0)) {
+        FORMAT_ERROR("can't write at path: '%s'", 
+            err_msg, path);
+        return false;
+    }
+
+    return true;
 }
 
 // Finds the executable for `cmd` and writes its path into `abs_path`.
@@ -139,7 +181,8 @@ typedef enum {
 // incrementing `*args_count` for each one. Values are not copied: they stay
 // owned by the tree. Starts from `*root` and stops at the first leaf with no
 // value (_epsilon_), i.e. at the end of the program.
-bool collect_arguments(char *args_out[], int *args_count, ASTNode **root) {
+bool collect_arguments(char *args_out[], int *args_count, 
+    ASTNode **root, int *io_last_idx) {
     // Descend to the leftmost leaf; the last child is the leftmost symbol
     // (see ASTNode.children).
     ASTNode* current_node = *root;
@@ -153,13 +196,21 @@ bool collect_arguments(char *args_out[], int *args_count, ASTNode **root) {
     // A leaf with a value is a word, literal or io token: store it.
     args_out[*args_count] = current_node->value;
     *args_count += 1;
-    // Continue with the rest of the program: the node right of the leaf's
-    // parent (the <tail> after an <arg>).
-    if (current_node->parent->right_sibling == NULL)
+    
+    // Stores the args_count's index of the last found IO symbol. 
+    if (strncmp(current_node->label, 
+        gSymbolsLiteralsReferenceTable[SYMBOL_IO], 2) == 0)
+        *io_last_idx = *args_count - 1;
+    
+    // Walk up from the leaf to the first node with a right sibling. 
+    ASTNode *next = current_node;
+    while (next != NULL && next->right_sibling == NULL)
+        next = next->parent;
+    if (next == NULL)
         return true;
 
-    collect_arguments(args_out, args_count, 
-       &current_node->parent->right_sibling);
+    collect_arguments(args_out, args_count,
+       &next->right_sibling, io_last_idx);
     return true;
 };
 
@@ -189,6 +240,7 @@ int main(int _argc, char **_argv, char **envp) {
         // Arguments for execv; the extra slot is for the closing NULL.
         char *args[MAX_ARGS+1] = {0};
         int args_count = 0;
+        int io_idx = -1;
 
         printf(PROMPT);
         // Fails on read errors and at end of input (e.g. Ctrl-D).
@@ -217,7 +269,8 @@ int main(int _argc, char **_argv, char **envp) {
         #endif
 
         // AST -> argument list; args[0] is the command name.
-        if(!collect_arguments(args, &args_count, &root)) {
+        if(!collect_arguments(args, &args_count, 
+            &root, &io_idx)) {
             printf("error: ast: failed to parse the tree\n");
             delete_tree(root);
             continue;
@@ -236,20 +289,55 @@ int main(int _argc, char **_argv, char **envp) {
             delete_tree(root);
             continue;
         }
+        #ifdef DEBUG
         LOG("ARGS COUNT: %d\n", args_count);
         for (int i = 0; i < args_count; i++) {
             LOG("ARG: value: %s\t size: %lu\n", args[i], strlen(args[i]));
         };
-
+        #endif
         // Run the command in a child process and wait for it to finish.
         int pid = fork();
         int child_status;
 
         if (pid == 0) {
-            args[args_count] = NULL;
+            if (io_idx > 0) {
+                LOG("IO: io token %c found at index %d\n", 
+                    CHAR_TO_UINT8(*args[io_idx]), io_idx);
+                switch (CHAR_TO_UINT8(*args[io_idx])) {
+                    case IO_PIPE:
+                    case IO_INPUT_REDIRECTION:
+                    case IO_OUTPUT_REDIRECTION:
+                    LOG("IO: Output redirection to %s\n", args[io_idx+1]);
+                    // The next argument is the dest of the output redirection.
+                    if (!can_write_at_path(args[io_idx+1], 
+                        error_msg)) {
+                        printf("error: %s\n", error_msg);
+                        exit(1);
+                    }
+
+                    int out_fd = open(args[io_idx+1], 
+                        O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                    if (out_fd < 0) {
+                        printf("error: failed to create or open '%s'\n", 
+                            args[io_idx+1]);
+                        exit(1);
+                    }
+                    dup2(out_fd, STDOUT_FILENO);
+                    close(out_fd);
+
+                    default:
+                    break;
+                }
+            }
+
+            if (io_idx > 0) args[io_idx] = NULL;
+            else args[args_count] = NULL;
             execv(cmd_abs_path, args);
         } else {
             wait(&child_status);
+            if (child_status != 0)
+                printf("[process %d exited with status %d]\n", 
+                pid, child_status);
             delete_tree(root);
         }
     }

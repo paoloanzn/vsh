@@ -281,10 +281,9 @@ int pop(SymbolStack *self, Symbol symbols_out[], int num_symbols) {
 
 // ##__VA_ARGS__ notation requires GNU C compiler extensions.
 // Use `-std=gnuXX`. 
-// Writes a formatted error message into `err`. The output is capped at
-// sizeof(format), the size of the format string literal, not of `err`.
+// Writes a formatted error message into `err`. 
 #define FORMAT_ERROR(format, err, ...) \
-snprintf(err, sizeof(format), format, ##__VA_ARGS__)
+snprintf(err, 4096, format, ##__VA_ARGS__)
 
 // Parses `tokens`, which must end with a TOKEN_EMPTY token.
 // (1) Validates a string for our grammar.
