@@ -256,6 +256,10 @@ int main(int _argc, char **_argv, char **envp) {
             continue;
         }
 
+        // Empty input, nothing to execute.
+        if (tokens[0].type == TOKEN_EMPTY)
+            continue;
+
         // Parse: tokens -> AST.
         ASTNode *root = NULL;
         if (!parse_tokens(tokens, &root, error_msg)) {
