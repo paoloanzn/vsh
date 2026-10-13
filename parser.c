@@ -1,3 +1,6 @@
+// Parser: a table-driven LL(1) parser. It checks the tokens produced by the
+// lexer against the grammar below and builds an abstract syntax tree (AST).
+
 #pragma once
 
 #include "lexer.c"
@@ -6,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Debug logging: prints only when compiled with -DDEBUG (see compile.sh).
 #ifndef LOG
 #ifdef DEBUG
 #define LOG(...) printf("debug: "); printf(__VA_ARGS__)
@@ -14,16 +18,10 @@
 #endif
 #endif
 
-/**
- * Grammar
- * <program> ::= <arg> <tail> | _epsilon_
- * <tail>    ::= <program> | io <program>
- * <arg>     ::= word | literal
- * 
- */
-
-// Note: I've noticed that things are a bit mixed up, since the lexer in lexer.c
-// is also doing some grammar check.
+// Grammar
+// <program> ::= <arg> <tail> | _epsilon_
+// <tail>    ::= <program> | io <program>
+// <arg>     ::= word | literal
 
 typedef enum {
     NON_TRM_SYM_PROGRAM = 0,
@@ -42,8 +40,11 @@ typedef enum {
 
     TERM_SYM_COUNT_RELATIVE
 } TerminalSymbol;
+// Number of terminal symbols.
 #define TERM_SYM_COUNT (TERM_SYM_COUNT_RELATIVE - NON_TRM_SYM_COUNT)
 
+// Every grammar symbol. Used for the parsing stack, as indexes of the parsing
+// table and as AST node labels (through gSymbolsLiteralsReferenceTable).
 typedef enum {
     SYMBOL_PROGRAM,
     SYMBOL_TAIL,
@@ -68,7 +69,7 @@ Symbol static gTokenSymbolMap[TOKEN_COUNT] = {
     [TOKEN_IO] = SYMBOL_IO
 };
 
-#define MAX_SYMBOL_LITERAL_REFERENCE_LEN 20
+// Printable names of the symbols, used in logs, errors and AST labels.
 char *gSymbolsLiteralsReferenceTable[COUNT_SYMBOL] = {
     [SYMBOL_PROGRAM] = "<program>",
     [SYMBOL_TAIL] = "<tail>",
@@ -80,10 +81,13 @@ char *gSymbolsLiteralsReferenceTable[COUNT_SYMBOL] = {
     [SYMBOL_EOI] = "$",
 };
 
+// Returns true for the terminals that match an input token. _epsilon_ and $
+// are not included.
 bool is_terminal(const Symbol symbol) {
     // SYMBOL_WORD <= symbol <= SYMBOL_IO
     return ((symbol >= SYMBOL_WORD) && (symbol <= SYMBOL_IO));
 };
+// FIRST and FOLLOW sets of the grammar, used to build the parsing table.
 /*
     first(symbol)
     | symbol    | first                        |
@@ -100,6 +104,7 @@ bool is_terminal(const Symbol symbol) {
     | <arg>     | word, literal, io, $ |
 */
 
+// LL(1) parsing table
 /*
     |           | word            | literal         | io             | $
     |-----------+-----------------+-----------------+----------------+----------|
@@ -116,6 +121,8 @@ bool is_terminal(const Symbol symbol) {
 
 // The first element of each production rule in the table is equal to the count
 // of elements it contains.
+// Dimensions: [non-terminal][next input symbol][count + production symbols].
+// Cells without a production are left filled with SYMBOL_NAN.
 static Symbol gParsingTable[NON_TRM_SYM_COUNT][TERM_SYM_COUNT_RELATIVE][NON_TRM_SYM_COUNT+TERM_SYM_COUNT+1] = {
     [0 ... NON_TRM_SYM_COUNT-1][0 ... TERM_SYM_COUNT_RELATIVE-1][0 ... NON_TRM_SYM_COUNT+TERM_SYM_COUNT] = SYMBOL_NAN,
 
@@ -138,10 +145,16 @@ static Symbol gParsingTable[NON_TRM_SYM_COUNT][TERM_SYM_COUNT_RELATIVE][NON_TRM_
 
 typedef struct ASTNode {
     char *label;
+    // Text of the matched token for terminals;
+    // NULL for non-terminal symbols.
     char *value;
     int num_children;
     struct ASTNode *parent;
+    // The node right of this one in the same production, or NULL if this is
+    // the rightmost one.
     struct ASTNode *right_sibling;
+    // Children are stored in reverse order: the last element is the leftmost
+    // symbol of the production.
     struct ASTNode **children;
     bool (*add_children)(struct ASTNode *self, struct ASTNode *child);
 } ASTNode;
@@ -151,6 +164,7 @@ bool add_children(ASTNode *self, ASTNode *child) {
     if (self->num_children == MAX_CHILDREN_FOR_NODE)
         return false;
     child->parent = self;
+    // Children must be added right to left.
     self->children[self->num_children] = child;
     if (self->num_children > 0)
         child->right_sibling = self->children[self->num_children - 1];
@@ -158,6 +172,8 @@ bool add_children(ASTNode *self, ASTNode *child) {
     return true;
 }
 
+// Allocates a new childless node and NULL when the alloc fails.
+// The node is heap allocated.
 ASTNode *create_node(const char *label) {
     ASTNode *new_node = (ASTNode *)malloc(sizeof(ASTNode));
     if (new_node == NULL)
@@ -183,6 +199,7 @@ ASTNode *create_node(const char *label) {
     return new_node;
 }
 
+// Frees `root` and its whole subtree.
 void delete_tree(ASTNode *root) {
     if (root == NULL)
         return;
@@ -201,7 +218,9 @@ void delete_tree(ASTNode *root) {
     for (int i = 0; i < n; i++) { \
         printf("    "); \
     } \
-
+// Prints `node` and its entire subtree.
+// Children are printed in reverser order: right to left, which
+// is the storage order.
 void print_node(ASTNode *node, int indent_level) {
     SET_LINE_INDENTATION(indent_level);
     printf("Label: %s | ", node->label);
@@ -219,14 +238,18 @@ void print_node(ASTNode *node, int indent_level) {
     return;
 }
 
-#define MAX_PARSING_STACK_SIZE 20
+// Capacity of the parser stack, in symbols.
+#define MAX_PARSING_STACK_SIZE 100
 
+// A fixed-capacity stack of Symbol, backed by an external buffer.
 typedef struct SymbolStack {
+    // Capacity of `ptr_stack`.
     size_t size;
     int top; // Always equal to last element's index + 1.
     bool (*is_empty)(struct SymbolStack *self);
     bool (*push)(struct SymbolStack *self, Symbol *symbol);
     int (*pop)(struct SymbolStack *self, Symbol symbols_out[], int num_symbols);
+    // Buffer holding the elements, bottom first.
     Symbol *ptr_stack;
 } SymbolStack;
 
@@ -234,6 +257,7 @@ bool is_empty(SymbolStack *self) {
     return (self->top == 0);
 }
 
+// Pushes a copy of `*symbol`. Returns false if the stack is full.
 bool push(SymbolStack *self, Symbol *symbol) {
     if (self->top == (self->size))
         return false; // No more space on the stack.
@@ -242,9 +266,11 @@ bool push(SymbolStack *self, Symbol *symbol) {
     return true;
 }
 
+// Pops up to `num_symbols` symbols into `symbols_out`, topmost first.
+// Returns the number of symbols popped.
 int pop(SymbolStack *self, Symbol symbols_out[], int num_symbols) {
     int copied = 0;
-    // Could be optimized with one single memcpy operation.
+    // TODO: Could be optimized with one single memcpy operation.
     for (int i = 0; (i < self->top) && (i < num_symbols); i++) {
         int top_idx = self->top - 1;
         memcpy(symbols_out+i, self->ptr_stack+top_idx, sizeof(Symbol));
@@ -255,9 +281,17 @@ int pop(SymbolStack *self, Symbol symbols_out[], int num_symbols) {
 
 // ##__VA_ARGS__ notation requires GNU C compiler extensions.
 // Use `-std=gnuXX`. 
+// Writes a formatted error message into `err`. The output is capped at
+// sizeof(format), the size of the format string literal, not of `err`.
 #define FORMAT_ERROR(format, err, ...) \
 snprintf(err, sizeof(format), format, ##__VA_ARGS__)
 
+// Parses `tokens`, which must end with a TOKEN_EMPTY token.
+// (1) Validates a string for our grammar.
+// (2) Builds the AST.
+// On failure writes a message to `err_msg` and returns false.
+// C implementation of https://www.geeksforgeeks.org/compiler-design/ll1-parsing-algorithm/
+// with added support for AST creation.
 bool parse_tokens(Token tokens[], ASTNode **out_root, char *err_msg) {
     Symbol _stack[MAX_PARSING_STACK_SIZE] = {};
     SymbolStack stack = {
@@ -265,6 +299,8 @@ bool parse_tokens(Token tokens[], ASTNode **out_root, char *err_msg) {
         is_empty, push, pop,
         _stack
     };
+    // The stack always starts with the one single element inside it,
+    // which must be the start symbol of the grammar.
     Symbol start_symbol = SYMBOL_PROGRAM;
     if (!stack.push(&stack, &start_symbol)) {
         FORMAT_ERROR(
@@ -276,8 +312,10 @@ bool parse_tokens(Token tokens[], ASTNode **out_root, char *err_msg) {
     ASTNode *root = create_node(gSymbolsLiteralsReferenceTable[start_symbol]);
     if (root == NULL)
         return false;
+
     ASTNode *active_node = root;
 
+    // Index of the next input token, LL(1) is 1 symbol lookahead).
     int token_cursor = 0;
 
     while(!stack.is_empty(&stack)) {
@@ -288,6 +326,10 @@ bool parse_tokens(Token tokens[], ASTNode **out_root, char *err_msg) {
         Symbol popped[POPPED_BUFFER_SIZE] = {};
 
         LOG("LL(1): Next token: %s\n", gSymbolsLiteralsReferenceTable[next_symbol]);
+        // WHEN: terminal on top
+        // It must match the lookahead, syntax error otherwise. 
+        // Store the token text in the AST, then consume both the symbol 
+        // and the token.
         if (is_terminal(top) || top == SYMBOL_EOI) {
             LOG("LL(1): Processing terminal: %s\n", gSymbolsLiteralsReferenceTable[top]);
             if (!(top == next_symbol)) {
@@ -306,6 +348,8 @@ bool parse_tokens(Token tokens[], ASTNode **out_root, char *err_msg) {
             active_node->value[tokens[token_cursor].len] = '\0'; 
                 
             // Walk up the three to find the first available right sibling.
+            // That becomes the new active node to which we continue building
+            // the tree.
             ASTNode *nearest_right_sibling = active_node->right_sibling;
             while (nearest_right_sibling == NULL) {
                 nearest_right_sibling = active_node->parent->right_sibling;
@@ -322,6 +366,9 @@ bool parse_tokens(Token tokens[], ASTNode **out_root, char *err_msg) {
 
             
         }
+        // WHEN: Non-terminal on top.
+        // Replace it with the right-hand side of the production chosen 
+        // by the lookahead in the parsing table.
         if (!is_terminal(top)) {
             LOG("LL(1): Processing non-terminal: %s\n", 
                 gSymbolsLiteralsReferenceTable[top]);
@@ -342,12 +389,15 @@ bool parse_tokens(Token tokens[], ASTNode **out_root, char *err_msg) {
                 return false;
             }
 
+            // Push the production's symbols right to left, so the leftmost
+            // one ends up on top. 
             int num_symbols = gParsingTable[top][next_symbol][0];
             for (int i = 0; i < num_symbols; i++) {
                 Symbol symbol = gParsingTable[top][next_symbol][num_symbols-i];
                 LOG("LL(1): Pushing symbol: %s\n", 
                     gSymbolsLiteralsReferenceTable[symbol]);
-                
+                // Each node pushed on the stack is added as a CHILDREN node,
+                // of the current active_node.
                 ASTNode *child_node = create_node(
                     gSymbolsLiteralsReferenceTable[symbol]);
                 if (child_node == NULL) {
@@ -365,6 +415,7 @@ bool parse_tokens(Token tokens[], ASTNode **out_root, char *err_msg) {
                 }
             }
 
+            // Move to the leftmost child: it matches the new top of the stack.
             active_node = active_node->children[num_symbols-1];
         }
 
