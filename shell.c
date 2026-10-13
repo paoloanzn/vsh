@@ -76,7 +76,7 @@ bool is_directory(const char *path) {
     return false;
 }
 
-bool can_write_at_path(const char *path, char *err_msg) {
+bool can_rw_at_path(const char *path, char *err_msg) {
     // Check if path exists (i.e file or directory)
     bool path_exists = true;
     if (access(path, F_OK) < 0)
@@ -89,7 +89,7 @@ bool can_write_at_path(const char *path, char *err_msg) {
     }
 
     // If exists check it's writable
-    if (path_exists && (access(path, W_OK) < 0)) {
+    if (path_exists && (access(path, W_OK | R_OK) < 0)) {
         FORMAT_ERROR("can't write at path: '%s'", 
             err_msg, path);
         return false;
@@ -309,11 +309,33 @@ int main(int _argc, char **_argv, char **envp) {
                     CHAR_TO_UINT8(*args[io_idx]), io_idx);
                 switch (CHAR_TO_UINT8(*args[io_idx])) {
                     case IO_PIPE:
+                    printf("error: `pipe` operator is not implemented\n");
+                    exit(1);
+                    break;
+
                     case IO_INPUT_REDIRECTION:
+                    LOG("IO: Input redirection to %s\n", args[io_idx+1]);
+                    if (!can_rw_at_path(args[io_idx+1], 
+                        error_msg)) {
+                        printf("error: %s\n", error_msg);
+                        exit(1);
+                    }
+
+                    int in_fd = open(args[io_idx+1], 
+                        O_RDONLY);
+                    if (in_fd < 0) {
+                        printf("error: failed to read '%s'\n", 
+                            args[io_idx+1]);
+                        exit(1);
+                    }
+                    dup2(in_fd, STDIN_FILENO);
+                    close(in_fd);
+                    break;
+
                     case IO_OUTPUT_REDIRECTION:
                     LOG("IO: Output redirection to %s\n", args[io_idx+1]);
                     // The next argument is the dest of the output redirection.
-                    if (!can_write_at_path(args[io_idx+1], 
+                    if (!can_rw_at_path(args[io_idx+1], 
                         error_msg)) {
                         printf("error: %s\n", error_msg);
                         exit(1);
@@ -328,7 +350,7 @@ int main(int _argc, char **_argv, char **envp) {
                     }
                     dup2(out_fd, STDOUT_FILENO);
                     close(out_fd);
-
+                    break;
                     default:
                     break;
                 }
