@@ -34,6 +34,14 @@ bool block_signal_set(sigset_t *set, char *err_msg) {
     return true;
 }
 
+bool unblock_signal_set(sigset_t *set, char *err_msg) {
+    if(sigprocmask(SIG_UNBLOCK, set, NULL) < 0) {
+        FORMAT_ERROR("signal: failed to unblock signals", err_msg);
+        return false;
+    }
+    return true;
+}
+
 bool block_sigint(char *err_msg) {
     sigset_t set = {};
     int to_block[] = {SIGINT};
@@ -43,6 +51,21 @@ bool block_sigint(char *err_msg) {
         return false;
     }
     if(!block_signal_set(&set, err_msg)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool unblock_sigint(char *err_msg) {
+    sigset_t set = {};
+    int to_unblock[] = {SIGINT};
+
+    if(!init_signal_set(&set, to_unblock, 1, 
+        err_msg)) {
+        return false;
+    }
+    if(!unblock_signal_set(&set, err_msg)) {
         return false;
     }
 

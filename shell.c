@@ -312,6 +312,11 @@ int main(int _argc, char **_argv, char **envp) {
         int child_status;
 
         if (pid == 0) {
+            if(!unblock_sigint(error_msg)) {
+                printf("error: %s\n", error_msg);
+                exit(1);
+            }
+
             if (io_idx > 0) {
                 LOG("IO: io token %c found at index %d\n", 
                     CHAR_TO_UINT8(*args[io_idx]), io_idx);
