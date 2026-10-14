@@ -67,6 +67,8 @@ int exec_file_exists(const char *path) {
     return access(path, F_OK | X_OK);
 }
 
+// Returns true if `path` is a directory. Terminates the shell if `path`
+// can't be inspected.
 bool is_directory(const char *path) {
     struct stat path_stat;
     if(stat(path, &path_stat) != 0) {
@@ -79,6 +81,10 @@ bool is_directory(const char *path) {
     return false;
 }
 
+// Checks that `path` can be used as the target of an I/O redirection.
+// Returns true if `path` does not exist yet, or if it is not a directory and
+// the user can both read and write it. Otherwise writes the reason into
+// `err_msg` and returns false.
 bool can_rw_at_path(const char *path, char *err_msg) {
     // Check if path exists (i.e file or directory)
     bool path_exists = true;
@@ -184,6 +190,9 @@ typedef enum {
 // incrementing `*args_count` for each one. Values are not copied: they stay
 // owned by the tree. Starts from `*root` and stops at the first leaf with no
 // value (_epsilon_), i.e. at the end of the program.
+// The io operator is collected like any other argument; `*io_last_idx` is set
+// to its index in `args_out` (the last one, if there are several). It is left
+// unchanged if there is none.
 bool collect_arguments(char *args_out[], int *args_count, 
     ASTNode **root, int *io_last_idx) {
     // Descend to the leftmost leaf; the last child is the leftmost symbol
@@ -206,6 +215,8 @@ bool collect_arguments(char *args_out[], int *args_count,
         *io_last_idx = *args_count - 1;
     
     // Walk up from the leaf to the first node with a right sibling. 
+    // That sibling holds the rest of the program; if there is none, the
+    // leaf was the last one.
     ASTNode *next = current_node;
     while (next != NULL && next->right_sibling == NULL)
         next = next->parent;
@@ -217,16 +228,20 @@ bool collect_arguments(char *args_out[], int *args_count,
     return true;
 };
 
-// Read-eval loop: reads a line, tokenizes and parses it, then runs it in a
+// Blocks SIGINT and starts the spy server thread (see spy.c), then runs the
+// read-eval loop: reads a line, tokenizes and parses it, then runs it in a
 // child process. Exits on the "exit" command or when input can't be read.
 int main(int _argc, char **_argv, char **envp) {
     char error_msg[4096] = "";
 
+    // Ctrl-C must not terminate the shell, only the running command.
+    // Block SIGINT before creating the server thread, so it inherits the mask.
     if(!block_sigint(error_msg)) {
         printf("error: %s\n", error_msg);
         exit(1);
     }
 
+    // Start the spy server and wait until it is listening or has failed.
     ServerStatus server_status = STATUS_NOT_STARTED;
     pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
     pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -246,10 +261,12 @@ int main(int _argc, char **_argv, char **envp) {
     }
 
     pthread_mutex_unlock(&sync.mtx);
+    // The server thread has already printed the reason.
     if(sync.server_status == STATUS_FAILED) {
         die("server");
     }
     pthread_mutex_destroy(&sync.mtx);
+    // No longer needed: the server thread only uses them during startup.
     pthread_cond_destroy(&sync.cond);
 
     int path_idx;
@@ -275,6 +292,7 @@ int main(int _argc, char **_argv, char **envp) {
         // Arguments for execv; the extra slot is for the closing NULL.
         char *args[MAX_ARGS+1] = {0};
         int args_count = 0;
+        // Index in `args` of the io operator; -1 if there is none.
         int io_idx = -1;
 
         printf(PROMPT);
@@ -339,11 +357,16 @@ int main(int _argc, char **_argv, char **envp) {
         int child_status;
 
         if (pid == 0) {
+            // The child inherits the blocked SIGINT: restore it so that
+            // Ctrl-C can stop the command. The mask survives execv.
             if(!unblock_sigint(error_msg)) {
                 printf("error: %s\n", error_msg);
                 exit(1);
             }
 
+            // Apply the io operator, if any, before running the command.
+            // Redirections replace stdin or stdout with the file named by
+            // the argument that follows the operator.
             if (io_idx > 0) {
                 LOG("IO: io token %c found at index %d\n", 
                     CHAR_TO_UINT8(*args[io_idx]), io_idx);
@@ -355,6 +378,7 @@ int main(int _argc, char **_argv, char **envp) {
 
                     case IO_INPUT_REDIRECTION:
                     LOG("IO: Input redirection to %s\n", args[io_idx+1]);
+                    // The next argument is the source of the input redirection.
                     if (!can_rw_at_path(args[io_idx+1], 
                         error_msg)) {
                         printf("error: %s\n", error_msg);
@@ -396,11 +420,15 @@ int main(int _argc, char **_argv, char **envp) {
                 }
             }
 
+            // The command's arguments end before the io operator: the
+            // operator and its file are handled by the shell, not passed on.
             if (io_idx > 0) args[io_idx] = NULL;
             else args[args_count] = NULL;
             execv(cmd_abs_path, args);
         } else {
             wait(&child_status);
+            // `child_status` is the raw status from wait(), not the exit
+            // code: see WEXITSTATUS() and WIFSIGNALED() in <sys/wait.h>.
             if (child_status != 0)
                 printf("[process %d exited with status %d]\n", 
                 pid, child_status);
@@ -408,6 +436,7 @@ int main(int _argc, char **_argv, char **envp) {
         }
     }
 
+    // Not reached for now: the loop above only ends through exit().
     pthread_cancel(server_thread);
     return 0;
 }
