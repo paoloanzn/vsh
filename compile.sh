@@ -1,7 +1,7 @@
 #!/bin/sh
 # usage: ./compile.sh [check|debug]
 CC=clang
-FLAGS="-std=gnu17"
+FLAGS="-std=gnu17 -pthreads"
 BUILD_DIR=build
 DEBUG_FLAGS="-g -O0 -DDEBUG"
 SANITIZE_FLAGS="-fsanitize=address -g -fno-omit-frame-pointer"

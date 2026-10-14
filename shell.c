@@ -1,4 +1,4 @@
-// vsh: a minimal shell.
+// vsh: a minimal shell that you can spy on.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -8,10 +8,12 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <pthread.h>
 
 #include "lexer.c"
 #include "parser.c"
 #include "signal.c"
+#include "spy.c"
 
 // Debug logging: prints only when compiled with -DDEBUG (see compile.sh).
 #ifndef LOG
@@ -225,6 +227,31 @@ int main(int _argc, char **_argv, char **envp) {
         exit(1);
     }
 
+    ServerStatus server_status = STATUS_NOT_STARTED;
+    pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+    pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+    ServerThreadSync sync = {
+        cond,
+        mtx,
+        server_status
+    };
+
+    pthread_t server_thread;
+    pthread_create(&server_thread, NULL, 
+        (void *)start_server, &sync);
+        
+    pthread_mutex_lock(&sync.mtx);
+    while(sync.server_status == STATUS_NOT_STARTED) {
+        pthread_cond_wait(&sync.cond, &sync.mtx);
+    }
+
+    pthread_mutex_unlock(&sync.mtx);
+    if(sync.server_status == STATUS_FAILED) {
+        die("server");
+    }
+    pthread_mutex_destroy(&sync.mtx);
+    pthread_cond_destroy(&sync.cond);
+
     int path_idx;
     if (get_path(envp, &path_idx) < 0) {
         die("PATH is not defined.");
@@ -380,5 +407,7 @@ int main(int _argc, char **_argv, char **envp) {
             delete_tree(root);
         }
     }
+
+    pthread_cancel(server_thread);
     return 0;
 }
